@@ -1,0 +1,25 @@
+id: baseline
+version: "0.1"
+generation: 0
+parent_id: null
+
+knowledge:
+  - path: confluence-basics.md
+    sha256: 2402e8789dee0c03c65c8d83aa401ebb80ca340909661ce9b84db89dbe6b86e7
+    tags:
+      - confluence
+      - basics
+
+skills: []
+
+tools:
+  root: mcp
+  server_entrypoint: server.py
+  sha256: b94e0e66307cd0cd441d6f8e311a13a91afac1cd94c4403280e9c0047ebf298b
+  declared_capabilities:
+    - confluence.pages.read
+    - confluence.pages.write
+    - confluence.search
+
+metadata:
+  description: Baseline primitive Confluence capability package.
