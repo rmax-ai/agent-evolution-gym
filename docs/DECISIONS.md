@@ -46,3 +46,22 @@ Story board = label-encoded epics/stories; per-story gate: ruff → ty → pytes
 No task-specific logic, no hidden knowledge (SPEC §23). Baseline package must land at
 30–60% success (SPEC §72 Phase 4 AC) — if baseline exceeds it, the curriculum needs
 harder tasks, not a stronger runtime.
+
+## D9 — World policy: owner/admin override is intended; capability enforcement sits at the runner boundary
+Terra Dev-2 review triage (docs/reviews/dev-2-review.md). Two explicit policies:
+1. **Owner/admin ACL override** is intended world realism (Confluence semantics: page
+   owners edit their pages; admins bypass ACLs). Scenario generators express denial
+   through non-owner, non-admin actors — never by relying on an owner being denied.
+   If denial-of-owner cases are ever needed, parameterize the resolver then.
+2. **Task capability enforcement (§14) is the runner/proxy boundary, not the raw API.**
+   The raw world API authenticates X-Actor only; per-execution grants
+   (confluence.pages.write/search) are enforced by the capability proxy that fronts
+   the world gateway for generated MCP tools (Dev-5.1 runner, Dev-7.3 proxy).
+3. Store updates are compare-and-swap (`update_page(expected_version=...)` raises
+   VersionConflictError); routes map it to 409. Snapshot timestamps are injectable;
+   list/search pagination is canonically ordered by page id (determinism §65).
+
+## D10 — Dev-3+ deferred realism (review findings)
+Deterministic latency/failure injection at the raw API (§13 "where relevant") is
+deferred past v0.1 core — 409 conflicts already exercise retry/recovery skills.
+Revisit when Dev-6 evolution experiments need richer error curricula.

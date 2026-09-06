@@ -143,6 +143,10 @@ _VARIANT_ALIASES: Final[dict[str, str]] = {
     "smoke": "minimal",
 }
 
+_BUILTIN_VARIANTS: Final[frozenset[str]] = frozenset(
+    {"default", "minimal", "permissions", "concurrent_edit"}
+)
+
 
 def build_store(seed: int | None = None, *, variant: str = "default") -> InMemoryConfluenceStore:
     """Build a populated, deterministic Confluence store.
@@ -199,7 +203,12 @@ def build_store(seed: int | None = None, *, variant: str = "default") -> InMemor
 
 def _normalize_variant(variant: str) -> str:
     normalized = variant.strip().casefold().replace("-", "_").replace(" ", "_")
-    return _VARIANT_ALIASES.get(normalized, normalized or "default")
+    resolved = _VARIANT_ALIASES.get(normalized, normalized)
+    if resolved not in _BUILTIN_VARIANTS:
+        raise ValueError(
+            f"unknown fixture variant: {variant!r}; expected one of {sorted(_BUILTIN_VARIANTS)}"
+        )
+    return resolved
 
 
 def _space_ids_for_variant(variant: str) -> set[str]:

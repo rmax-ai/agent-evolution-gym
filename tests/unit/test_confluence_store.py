@@ -1,6 +1,8 @@
 """Unit tests for the in-memory Confluence state store."""
 
-from agentgym.world.store import InMemoryConfluenceStore
+import pytest
+
+from agentgym.world.store import InMemoryConfluenceStore, VersionConflictError
 
 
 def _page() -> dict[str, object]:
@@ -59,3 +61,37 @@ def test_restore_replaces_state_without_aliasing_snapshot() -> None:
 
     assert snapshot.resources["pages"]["page-1"]["body"] == "Draft"
     assert restored.pages["page-1"]["body"] == "Changed after restore"
+
+
+def test_conditional_update_stale_version_raises_without_mutation() -> None:
+    store = InMemoryConfluenceStore()
+    store.add_page(_page())
+
+    with pytest.raises(VersionConflictError):
+        store.update_page("page-1", body="Stale write", expected_version=7)
+
+    assert store.pages["page-1"]["version"] == 1
+    assert store.pages["page-1"]["body"] == "Draft"
+    assert len(store.page_versions["page-1"]) == 1
+
+
+def test_conditional_update_matching_version_succeeds() -> None:
+    store = InMemoryConfluenceStore()
+    store.add_page(_page())
+
+    updated = store.update_page("page-1", body="Fresh write", expected_version=1)
+
+    assert updated.version == 2
+    assert store.pages["page-1"]["body"] == "Fresh write"
+
+
+def test_two_writers_same_version_only_one_wins() -> None:
+    store = InMemoryConfluenceStore()
+    store.add_page(_page())
+
+    first = store.update_page("page-1", body="Writer A", expected_version=1)
+    assert first.version == 2
+
+    with pytest.raises(VersionConflictError):
+        store.update_page("page-1", body="Writer B", expected_version=1)
+    assert store.pages["page-1"]["body"] == "Writer A"

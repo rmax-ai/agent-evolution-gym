@@ -89,14 +89,23 @@ class InMemoryConfluenceStore:
             "permissions": self.permissions,
         }
 
-    def snapshot(self, *, snapshot_id: str = "confluence-snapshot") -> WorldSnapshot:
-        """Return a snapshot detached from all mutable store state."""
+    def snapshot(
+        self,
+        *,
+        snapshot_id: str = "confluence-snapshot",
+        timestamp: str | None = None,
+    ) -> WorldSnapshot:
+        """Return a snapshot detached from all mutable store state.
+
+        ``timestamp`` may be injected for reproducible state identity; when
+        omitted a wall-clock ISO timestamp is recorded as provenance.
+        """
 
         return WorldSnapshot(
             id=snapshot_id,
             domain_id=self.domain_id,
             schema_version=self.schema_version,
-            timestamp=datetime.now(UTC).isoformat(),
+            timestamp=timestamp or datetime.now(UTC).isoformat(),
             resources=deepcopy(self.resources),
         )
 
@@ -161,10 +170,22 @@ class InMemoryConfluenceStore:
         *,
         title: str | None = None,
         body: str | None = None,
+        expected_version: int | None = None,
     ) -> Page:
-        """Apply page changes, advance its version, and append the new history entry."""
+        """Conditionally apply page changes under an optimistic-concurrency guard.
+
+        When ``expected_version`` is given and does not match the current page
+        version, no change is made and :class:`VersionConflictError` is raised.
+        Version bump and history append happen together with the guarded check.
+        """
 
         page = self._require_page(page_id)
+        if expected_version is not None:
+            current = int(page.get("version", 1))
+            if current != expected_version:
+                raise VersionConflictError(
+                    f"page {page_id} is at version {current}; expected {expected_version}"
+                )
         if updates is not None:
             changes = self._page_data(updates) if isinstance(updates, Page) else dict(updates)
             changes.pop("id", None)
@@ -207,3 +228,7 @@ class InMemoryConfluenceStore:
 
 InMemoryStateStore = InMemoryConfluenceStore
 ConfluenceStateStore = InMemoryConfluenceStore
+
+
+class VersionConflictError(Exception):
+    """Raised when a conditional page update targets a stale version."""

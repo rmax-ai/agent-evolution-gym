@@ -21,7 +21,11 @@ from starlette.status import (
     HTTP_500_INTERNAL_SERVER_ERROR,
 )
 
-from agentgym.world.store import InMemoryConfluenceStore, Page
+from agentgym.world.store import (
+    InMemoryConfluenceStore,
+    Page,
+    VersionConflictError,
+)
 from domains.confluence.world.models import (
     PageCreateRequest,
     PageListResponse,
@@ -365,6 +369,8 @@ def _visible_pages(
             if normalized_query not in haystack:
                 continue
         visible.append(_page_response(page))
+    # Canonical ordering keeps offset pagination deterministic across runs.
+    visible.sort(key=lambda item: item.id)
     return visible
 
 
@@ -530,7 +536,14 @@ async def update_page(
         for key, value in payload.model_dump(exclude_unset=True).items()
         if value is not None
     }
-    updated = store.update_page(page_id, updates)
+    try:
+        updated = store.update_page(page_id, updates, expected_version=current_version)
+    except VersionConflictError as error:
+        raise APIError(
+            HTTP_409_CONFLICT,
+            "version_conflict",
+            str(error),
+        ) from error
     return _page_response(updated.model_dump(mode="python"))
 
 

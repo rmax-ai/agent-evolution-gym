@@ -1,0 +1,15 @@
+- scenario_id: retrieval
+  count: 5
+  seed_range: [1000, 1004]
+
+- scenario_id: edit_page
+  count: 5
+  seed_range: [1100, 1104]
+
+- scenario_id: preservation
+  count: 5
+  seed_range: [1200, 1204]
+
+- scenario_id: concurrent_edit
+  count: 5
+  seed_range: [1300, 1304]
