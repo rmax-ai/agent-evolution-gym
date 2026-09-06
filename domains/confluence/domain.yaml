@@ -1,0 +1,24 @@
+id: enterprise-confluence
+version: "0.1"
+
+description: >
+  Stateful simulated knowledge-management environment.
+
+world_provider: docker
+
+scenario_modules:
+  - scenarios.edit_page
+  - scenarios.concurrent_edit
+  - scenarios.permissions
+
+verifier_modules:
+  - verifiers.page_edit
+
+train_split: splits/train.yaml
+validation_split: splits/validation.yaml
+test_split: splits/test.yaml
+
+capabilities:
+  - confluence.pages.read
+  - confluence.pages.write
+  - confluence.search
