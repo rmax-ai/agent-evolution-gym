@@ -6,10 +6,15 @@ from pathlib import Path
 from typing import Any, Self
 
 import yaml
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 
 from agentgym.core.domain import DomainSpec
+from agentgym.core.json_safe import ensure_json_safe
 from agentgym.world.capabilities import Capability
+
+
+class PackageIntegrityError(ValueError):
+    """Raised when a package manifest does not match its artifact files."""
 
 
 class KnowledgeArtifact(BaseModel):
@@ -54,17 +59,30 @@ class AgentPackage(BaseModel):
     id: str
     version: str
     generation: int
-    parent_id: str | None = None
+    parent_id: str | None
     knowledge: list[KnowledgeArtifact]
     skills: list[SkillArtifact]
     tools: ToolPackage
     metadata: dict[str, Any]
 
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def validate_metadata(cls, value: object) -> object:
+        """Reject package metadata that cannot be persisted as JSON."""
+
+        return ensure_json_safe(value)
+
     def validate_capabilities(
         self,
         domain_capabilities: DomainSpec | Iterable[str | Capability],
     ) -> None:
-        """Raise when this package's MCP tools exceed the domain capabilities."""
+        """Raise when declared capabilities exceed the domain capability set.
+
+        This subset check is defense in depth only. Authorization ownership
+        remains at the runner boundary, where the §21 capability proxy and the
+        §64 test-split isolation rules are enforced (D9); this method does not
+        authorize MCP code or raw API calls.
+        """
 
         self.tools.validate_capabilities(domain_capabilities)
 
@@ -76,8 +94,8 @@ class AgentPackage(BaseModel):
     ) -> Self:
         """Load a package manifest from a package directory.
 
-        Hashes are recomputed from the artifact bytes on disk so the returned
-        contract reflects the files that will actually be executed.
+        Persisted hashes are verified against the artifact files on disk and are
+        retained as evidence of the manifest that was loaded.
         """
 
         package_dir = _package_directory(path)
@@ -88,7 +106,7 @@ class AgentPackage(BaseModel):
         with manifest_path.open(encoding="utf-8") as stream:
             package = cls.model_validate(yaml.safe_load(stream))
 
-        package._set_hashes(package_dir)
+        package.verify_hashes(package_dir)
         if domain is not None:
             package.validate_capabilities(domain)
         return package
@@ -133,7 +151,7 @@ class AgentPackage(BaseModel):
         package_dir.mkdir(parents=True, exist_ok=True)
         (package_dir / "knowledge").mkdir(exist_ok=True)
         (package_dir / "skills").mkdir(exist_ok=True)
-        tool_root = _resolve_path(package_dir, self.tools.root)
+        tool_root = _tool_root_path(package_dir, self.tools.root)
         tool_root.mkdir(parents=True, exist_ok=True)
 
         self._set_hashes(package_dir)
@@ -168,14 +186,15 @@ class AgentPackage(BaseModel):
         """Raise if persisted artifact hashes do not match files on disk."""
 
         package_dir = _package_directory(path)
-        expected = self._computed_hashes(package_dir)
-        actual = [
-            *[artifact.sha256 for artifact in self.knowledge],
-            *[artifact.sha256 for artifact in self.skills],
-            self.tools.sha256,
-        ]
+        try:
+            expected = self._computed_hashes(package_dir)
+        except FileNotFoundError as error:
+            raise PackageIntegrityError(
+                "Agent package artifact files do not match the manifest"
+            ) from error
+        actual = self._stored_hashes()
         if expected != actual:
-            raise ValueError("Agent package artifact hashes do not match files on disk")
+            raise PackageIntegrityError("Agent package artifact hashes do not match files on disk")
 
     def _set_hashes(self, package_dir: Path) -> None:
         """Replace manifest hashes with digests computed from package files."""
@@ -202,11 +221,20 @@ class AgentPackage(BaseModel):
             for artifact in self.skills
         ]
 
-        tool_root = _resolve_path(package_dir, self.tools.root)
+        tool_root = _tool_root_path(package_dir, self.tools.root)
         if not tool_root.exists():
             raise FileNotFoundError(f"Tool package root does not exist: {tool_root}")
-        _tool_entrypoint(package_dir, tool_root, self.tools.server_entrypoint)
+        _tool_entrypoint(tool_root, self.tools.server_entrypoint)
         return [*knowledge_hashes, *skill_hashes, _sha256_path(tool_root)]
+
+    def _stored_hashes(self) -> list[str]:
+        """Return artifact hashes as recorded in the manifest."""
+
+        return [
+            *[artifact.sha256 for artifact in self.knowledge],
+            *[artifact.sha256 for artifact in self.skills],
+            self.tools.sha256,
+        ]
 
 
 def _capability_ids(
@@ -237,60 +265,105 @@ def _package_directory(path: str | Path) -> Path:
     return package_path.parent if package_path.name == "package.yaml" else package_path
 
 
-def _resolve_path(package_dir: Path, path: str) -> Path:
-    """Resolve a package-relative path while preventing directory escape."""
+def _artifact_path(package_dir: Path, collection: str, artifact_path: str) -> Path:
+    """Resolve an artifact path while confining it to its declared layer."""
 
-    package_root = package_dir.resolve()
-    candidate = Path(path)
-    resolved = (candidate if candidate.is_absolute() else package_root / candidate).resolve()
+    candidate = _layer_path(package_dir, collection, artifact_path)
+    if not candidate.exists():
+        raise FileNotFoundError(f"Artifact file does not exist: {artifact_path}")
+    return candidate
+
+
+def _tool_entrypoint(tool_root: Path, entrypoint: str) -> Path:
+    """Resolve and validate the MCP server entrypoint."""
+
+    relative_path = _strict_relative_path(entrypoint, field="MCP server entrypoint")
+    candidate = (tool_root / relative_path).resolve()
     try:
-        resolved.relative_to(package_root)
+        candidate.relative_to(tool_root)
     except ValueError as error:
-        raise ValueError(f"Package path escapes package directory: {path}") from error
+        raise ValueError(f"MCP server entrypoint escapes tool root: {entrypoint}") from error
+    if not candidate.is_file():
+        raise FileNotFoundError(f"MCP server entrypoint does not exist: {entrypoint}")
+    return candidate
+
+
+def _layer_path(package_dir: Path, collection: str, path: str) -> Path:
+    """Resolve a path represented relative to a package layer."""
+
+    relative_path = _strict_relative_path(path, field=f"{collection} artifact")
+    if relative_path.parts[:1] == (collection,):
+        candidate = package_dir / relative_path
+    else:
+        if relative_path.parts[:1] in {"knowledge", "skills", "mcp", "package.yaml"}:
+            raise ValueError(f"{collection} artifact path crosses package layers: {path}")
+        candidate = package_dir / collection / relative_path
+
+    layer_root = (package_dir / collection).resolve()
+    resolved = candidate.resolve()
+    try:
+        resolved.relative_to(layer_root)
+    except ValueError as error:
+        raise ValueError(f"{collection} artifact path escapes its layer: {path}") from error
     return resolved
 
 
-def _artifact_path(package_dir: Path, collection: str, artifact_path: str) -> Path:
-    """Resolve an artifact path stored with or without its collection prefix."""
+def _tool_root_path(package_dir: Path, root: str) -> Path:
+    """Resolve a tool root that must be ``mcp`` or one of its descendants."""
 
-    relative_path = Path(artifact_path)
-    candidates = [_resolve_path(package_dir, artifact_path)]
-    if not relative_path.is_absolute() and relative_path.parts[:1] != (collection,):
-        candidates.append(_resolve_path(package_dir, str(Path(collection) / relative_path)))
+    relative_path = _strict_relative_path(root, field="tool package root")
+    if relative_path.parts[:1] != ("mcp",):
+        raise ValueError(f"Tool package root must be under the mcp layer: {root}")
 
-    for candidate in candidates:
-        if candidate.exists():
-            return candidate
-    raise FileNotFoundError(f"Artifact file does not exist: {artifact_path}")
+    mcp_root = (package_dir / "mcp").resolve()
+    resolved = (package_dir / relative_path).resolve()
+    try:
+        resolved.relative_to(mcp_root)
+    except ValueError as error:
+        raise ValueError(f"Tool package root escapes the mcp layer: {root}") from error
+    return resolved
 
 
-def _tool_entrypoint(package_dir: Path, tool_root: Path, entrypoint: str) -> Path:
-    """Resolve and validate the MCP server entrypoint."""
+def _strict_relative_path(path: str, *, field: str) -> Path:
+    """Parse a package path and reject absolute or traversal components."""
 
-    candidates = [_resolve_path(tool_root, entrypoint)]
-    entrypoint_path = Path(entrypoint)
-    if not entrypoint_path.is_absolute():
-        candidates.append(_resolve_path(package_dir, entrypoint))
-
-    for candidate in candidates:
-        if candidate.is_file():
-            return candidate
-    raise FileNotFoundError(f"MCP server entrypoint does not exist: {entrypoint}")
+    relative_path = Path(path)
+    if relative_path.is_absolute() or not relative_path.parts:
+        raise ValueError(f"{field} must be a non-empty relative path: {path}")
+    if any(part in {".", ".."} for part in relative_path.parts):
+        raise ValueError(f"{field} must not contain traversal components: {path}")
+    return relative_path
 
 
 def _sha256_path(path: Path) -> str:
-    """Hash one artifact file or all files in an artifact directory."""
+    """Hash one file or a canonical, path-aware tree of regular files.
+
+    Individual knowledge and skill artifacts retain their byte digest. Tool
+    directories include each POSIX relative path and byte length before the file
+    bytes, in sorted path order, so renames and ambiguous concatenations change
+    the digest. Symlinks are rejected rather than hashing an unspecified target.
+    """
 
     digest = hashlib.sha256()
+    if path.is_symlink():
+        raise ValueError(f"Symlinks are not allowed in package artifacts: {path}")
     if path.is_file():
         digest.update(path.read_bytes())
     elif path.is_dir():
+        entries = list(path.rglob("*"))
+        if any(candidate.is_symlink() for candidate in entries):
+            raise ValueError(f"Symlinks are not allowed in tool package trees: {path}")
         files = sorted(
-            (candidate for candidate in path.rglob("*") if candidate.is_file()),
+            (candidate for candidate in entries if candidate.is_file()),
             key=lambda candidate: candidate.relative_to(path).as_posix(),
         )
         for candidate in files:
-            digest.update(candidate.read_bytes())
+            relative_path = candidate.relative_to(path).as_posix().encode("utf-8")
+            contents = candidate.read_bytes()
+            digest.update(len(relative_path).to_bytes(8, "big"))
+            digest.update(relative_path)
+            digest.update(len(contents).to_bytes(8, "big"))
+            digest.update(contents)
     else:
         raise FileNotFoundError(f"Artifact path does not exist: {path}")
     return digest.hexdigest()

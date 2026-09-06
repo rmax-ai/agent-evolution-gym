@@ -1,8 +1,9 @@
 """Unit tests for trajectory, verification, and rollout contracts."""
 
-import json
 from datetime import date
 from decimal import Decimal
+
+import pytest
 
 from agentgym.core.rollout import Rollout, RolloutMetrics
 from agentgym.core.trajectory import TrajectoryEvent, TrajectoryEventType
@@ -82,21 +83,16 @@ def test_verification_result_json_round_trip_preserves_categories() -> None:
     assert VerificationResult.model_validate(dumped) == result
 
 
-def test_assertion_observed_values_are_json_safe_when_persisted() -> None:
-    assertion = AssertionResult(
-        id="observed-value",
-        passed=True,
-        category="invariant",
-        expected={"observed_on": date(2026, 9, 6), "cost": Decimal("1.25")},
-        actual=object(),
-        message="The observed value is recorded.",
-    )
-
-    dumped = assertion.model_dump(mode="json")
-
-    assert dumped["expected"] == {"observed_on": "2026-09-06", "cost": "1.25"}
-    assert isinstance(dumped["actual"], str)
-    json.dumps(dumped)
+def test_assertion_observed_values_reject_lossy_json_conversion() -> None:
+    with pytest.raises(ValueError, match="JSON-safe"):
+        AssertionResult(
+            id="observed-value",
+            passed=True,
+            category="invariant",
+            expected={"observed_on": date(2026, 9, 6), "cost": Decimal("1.25")},
+            actual=object(),
+            message="The observed value is recorded.",
+        )
 
 
 def test_rollout_json_round_trip_includes_typed_verification_and_metrics() -> None:

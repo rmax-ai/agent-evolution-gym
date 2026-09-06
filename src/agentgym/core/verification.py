@@ -2,14 +2,9 @@
 
 from typing import Any
 
-from pydantic import BaseModel, field_serializer
-from pydantic_core import to_jsonable_python
+from pydantic import BaseModel, field_validator
 
-
-def _json_safe(value: object | None) -> object | None:
-    """Convert an observed value into a value suitable for JSON persistence."""
-
-    return to_jsonable_python(value, fallback=lambda unknown: str(unknown))
+from agentgym.core.json_safe import ensure_json_safe
 
 
 class AssertionResult(BaseModel):
@@ -22,11 +17,12 @@ class AssertionResult(BaseModel):
     actual: object | None
     message: str
 
-    @field_serializer("expected", "actual", when_used="json")
-    def serialize_observed_value(self, value: object | None) -> object | None:
-        """Normalize observed values when the assertion is persisted as JSON."""
+    @field_validator("expected", "actual", mode="before")
+    @classmethod
+    def validate_observed_value(cls, value: object | None) -> object | None:
+        """Reject observed values that cannot round-trip through JSON."""
 
-        return _json_safe(value)
+        return ensure_json_safe(value)
 
 
 class VerificationResult(BaseModel):
@@ -39,3 +35,10 @@ class VerificationResult(BaseModel):
     forbidden_changes_passed: bool
     invariants_passed: bool
     metadata: dict[str, Any]
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def validate_metadata(cls, value: object) -> object:
+        """Reject verification metadata that cannot be persisted as JSON."""
+
+        return ensure_json_safe(value)

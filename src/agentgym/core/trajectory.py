@@ -3,7 +3,9 @@
 from enum import StrEnum
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from agentgym.core.json_safe import ensure_json_safe
 
 
 class TrajectoryEventType(StrEnum):
@@ -34,3 +36,10 @@ class TrajectoryEvent(BaseModel):
     type: TrajectoryEventType
     actor: str
     payload: dict[str, Any]
+
+    @field_validator("payload", mode="before")
+    @classmethod
+    def validate_payload(cls, value: object) -> object:
+        """Reject event payloads that cannot be persisted as JSON."""
+
+        return ensure_json_safe(value)

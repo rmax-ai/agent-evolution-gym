@@ -2,7 +2,9 @@
 
 from typing import Any
 
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
+
+from agentgym.core.json_safe import ensure_json_safe
 
 
 class Task(BaseModel):
@@ -16,3 +18,10 @@ class Task(BaseModel):
     initial_snapshot_ref: str
     verifier_id: str
     metadata: dict[str, Any]
+
+    @field_validator("metadata", mode="before")
+    @classmethod
+    def validate_metadata(cls, value: object) -> object:
+        """Reject task metadata that cannot be persisted as JSON."""
+
+        return ensure_json_safe(value)

@@ -79,8 +79,13 @@ def test_package_save_loads_yaml_and_hashes_artifact_bytes(tmp_path: Path) -> No
         (package_dir / "skills" / "safely-edit-page" / "SKILL.md").read_bytes()
     ).hexdigest()
     tool_digest = hashlib.sha256()
-    tool_digest.update((package_dir / "mcp" / "server.py").read_bytes())
-    tool_digest.update((package_dir / "mcp" / "tools" / "safe.py").read_bytes())
+    for relative_path in ("server.py", "tools/safe.py"):
+        encoded_path = relative_path.encode("utf-8")
+        contents = (package_dir / "mcp" / relative_path).read_bytes()
+        tool_digest.update(len(encoded_path).to_bytes(8, "big"))
+        tool_digest.update(encoded_path)
+        tool_digest.update(len(contents).to_bytes(8, "big"))
+        tool_digest.update(contents)
 
     assert package.knowledge[0].sha256 == knowledge_hash
     assert package.skills[0].sha256 == skill_hash
