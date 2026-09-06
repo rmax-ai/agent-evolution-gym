@@ -22,5 +22,8 @@ htmlcov/
 .envrc
 *.pem
 
+# Agent tooling artifacts
+.serena/
+
 # OS
 .DS_Store
