@@ -29,7 +29,9 @@ def test_domain_yaml_loads_into_domainspec() -> None:
     ]
     assert spec.train_split == "splits/train.yaml"
     assert spec.scenario_modules == [
+        "scenarios.retrieval",
         "scenarios.edit_page",
+        "scenarios.preservation",
         "scenarios.concurrent_edit",
         "scenarios.permissions",
     ]

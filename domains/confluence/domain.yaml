@@ -7,7 +7,9 @@ description: >
 world_provider: docker
 
 scenario_modules:
+  - scenarios.retrieval
   - scenarios.edit_page
+  - scenarios.preservation
   - scenarios.concurrent_edit
   - scenarios.permissions
 
