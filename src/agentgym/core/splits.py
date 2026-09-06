@@ -64,6 +64,12 @@ class SplitSpec(BaseModel):
 
     entries: list[SplitEntry]
 
+    @property
+    def scenarios(self) -> list[SplitEntry]:
+        """Alias for callers that refer to entries as scenario records."""
+
+        return self.entries
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> Self:
         """Load a split manifest from a YAML list or an ``entries`` mapping."""

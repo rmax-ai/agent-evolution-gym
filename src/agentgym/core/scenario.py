@@ -14,7 +14,7 @@ import json
 from collections.abc import Awaitable, Iterable, Iterator, Mapping
 from pathlib import Path
 from types import ModuleType
-from typing import Any, Protocol, cast
+from typing import Any, Protocol, cast, runtime_checkable
 
 from agentgym.core.task import Task
 from agentgym.world.snapshot import WorldSnapshot
@@ -22,6 +22,7 @@ from agentgym.world.snapshot import WorldSnapshot
 type ScenarioGeneration = Task | Awaitable[Task]
 
 
+@runtime_checkable
 class ScenarioGenerator(Protocol):
     """Produce one deterministic task instance for a seed.
 
@@ -36,6 +37,7 @@ class ScenarioGenerator(Protocol):
         """Create the task and stage the task's initial world state."""
 
 
+@runtime_checkable
 class SnapshotSource(Protocol):
     """The portion of a world/store needed by snapshot staging."""
 
@@ -73,7 +75,7 @@ async def write_snapshot_async(
     snapshot = _capture_snapshot(source, snapshot_id=snapshot_id)
     if inspect.isawaitable(snapshot):
         snapshot = await snapshot
-    return _write_snapshot(snapshot, path)
+    return _write_snapshot(_validated_snapshot(snapshot), path)
 
 
 def read_snapshot(path: str | Path) -> WorldSnapshot:
@@ -84,14 +86,15 @@ def read_snapshot(path: str | Path) -> WorldSnapshot:
         return WorldSnapshot.model_validate(json.load(stream))
 
 
+load_snapshot = read_snapshot
+
+
 class ScenarioRegistry:
     """Registry of domain scenario generators keyed by their stable ids."""
 
     def __init__(
         self,
-        generators: Iterable[ScenarioGenerator]
-        | Mapping[str, ScenarioGenerator]
-        | None = None,
+        generators: Iterable[ScenarioGenerator] | Mapping[str, ScenarioGenerator] | None = None,
     ) -> None:
         self._generators: dict[str, ScenarioGenerator] = {}
         if generators is not None:
@@ -114,9 +117,7 @@ class ScenarioRegistry:
         registry = cls()
         for module_ref in modules:
             module = (
-                importlib.import_module(module_ref)
-                if isinstance(module_ref, str)
-                else module_ref
+                importlib.import_module(module_ref) if isinstance(module_ref, str) else module_ref
             )
             register_scenarios = getattr(module, "register_scenarios", None)
             if callable(register_scenarios):
@@ -177,7 +178,10 @@ class ScenarioRegistry:
     def generate(self, scenario_id: str, seed: int) -> ScenarioGeneration:
         """Invoke a generator, preserving whether its method is sync or async."""
 
-        return self.require(scenario_id).generate(seed)
+        result = self.require(scenario_id).generate(seed)
+        if inspect.isawaitable(result):
+            return result
+        return _validated_task(result, scenario_id=scenario_id)
 
     async def generate_async(self, scenario_id: str, seed: int) -> Task:
         """Invoke either kind of generator and return a validated task."""
@@ -185,12 +189,7 @@ class ScenarioRegistry:
         result = self.generate(scenario_id, seed)
         if inspect.isawaitable(result):
             result = await result
-        if not isinstance(result, Task):
-            raise TypeError(
-                f"scenario generator {scenario_id!r} returned {type(result).__name__}, "
-                "expected Task"
-            )
-        return result
+        return _validated_task(result, scenario_id=scenario_id)
 
     def __contains__(self, scenario_id: object) -> bool:
         return scenario_id in self._generators
@@ -213,10 +212,9 @@ def _capture_sync_snapshot(
     snapshot = _capture_snapshot(source, snapshot_id=snapshot_id)
     if inspect.isawaitable(snapshot):
         raise TypeError(
-            "write_snapshot received an asynchronous snapshot source; "
-            "use write_snapshot_async"
+            "write_snapshot received an asynchronous snapshot source; use write_snapshot_async"
         )
-    return snapshot
+    return _validated_snapshot(snapshot)
 
 
 def _capture_snapshot(
@@ -242,6 +240,20 @@ def _write_snapshot(snapshot: WorldSnapshot, path: str | Path) -> Path:
         encoding="utf-8",
     )
     return snapshot_path
+
+
+def _validated_snapshot(value: object) -> WorldSnapshot:
+    if not isinstance(value, WorldSnapshot):
+        raise TypeError(f"snapshot source returned {type(value).__name__}, expected WorldSnapshot")
+    return value
+
+
+def _validated_task(value: object, *, scenario_id: str) -> Task:
+    if not isinstance(value, Task):
+        raise TypeError(
+            f"scenario generator {scenario_id!r} returned {type(value).__name__}, expected Task"
+        )
+    return value
 
 
 def _generator_id(generator: ScenarioGenerator) -> str:
@@ -272,6 +284,10 @@ def _module_generators(module: ModuleType) -> tuple[ScenarioGenerator, ...]:
 scenario_registry = ScenarioRegistry()
 
 
+stage_snapshot = write_snapshot
+stage_snapshot_async = write_snapshot_async
+
+
 def register_scenario(generator: ScenarioGenerator) -> ScenarioGenerator:
     """Register a generator in the process-wide default registry."""
 
@@ -283,9 +299,12 @@ __all__ = [
     "ScenarioGenerator",
     "ScenarioRegistry",
     "SnapshotSource",
+    "load_snapshot",
     "read_snapshot",
     "register_scenario",
     "scenario_registry",
+    "stage_snapshot",
+    "stage_snapshot_async",
     "write_snapshot",
     "write_snapshot_async",
 ]

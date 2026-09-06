@@ -7,11 +7,16 @@ import yaml
 from pydantic import BaseModel
 
 from agentgym.core.scenario import (
+    ScenarioGeneration,
     ScenarioGenerator,
     ScenarioRegistry,
+    SnapshotSource,
+    load_snapshot,
     read_snapshot,
     register_scenario,
     scenario_registry,
+    stage_snapshot,
+    stage_snapshot_async,
     write_snapshot,
     write_snapshot_async,
 )
@@ -27,16 +32,21 @@ from agentgym.core.splits import (
 __all__ = [
     "DomainSpec",
     "ScenarioEntry",
+    "ScenarioGeneration",
     "ScenarioGenerator",
     "ScenarioRegistry",
     "ScenarioSplit",
+    "SnapshotSource",
     "SplitEntry",
     "SplitSpec",
+    "load_snapshot",
     "load_split",
     "load_split_spec",
     "read_snapshot",
     "register_scenario",
     "scenario_registry",
+    "stage_snapshot",
+    "stage_snapshot_async",
     "write_snapshot",
     "write_snapshot_async",
 ]
