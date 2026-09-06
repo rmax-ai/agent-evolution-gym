@@ -1,8 +1,25 @@
 """Rollout and rollout-metrics contracts."""
 
+from enum import StrEnum
+
 from pydantic import BaseModel
 
 from agentgym.core.verification import VerificationResult
+
+
+class RunStatus(StrEnum):
+    """Execution outcome taxonomy defined by SPEC section 31."""
+
+    PASS = "pass"
+    TASK_FAIL = "task_fail"
+    PARTIAL = "partial"
+    AGENT_ERROR = "agent_error"
+    TOOL_ERROR = "tool_error"
+    ENVIRONMENT_ERROR = "environment_error"
+    VERIFIER_ERROR = "verifier_error"
+    TIMEOUT = "timeout"
+    BUDGET_EXCEEDED = "budget_exceeded"
+    POLICY_VIOLATION = "policy_violation"
 
 
 class RolloutMetrics(BaseModel):
