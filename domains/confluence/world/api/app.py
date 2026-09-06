@@ -6,6 +6,7 @@ from starlette.exceptions import HTTPException as StarletteHTTPException
 
 from agentgym.world.store import InMemoryConfluenceStore
 
+from .lifecycle import create_control_router
 from .routes import (
     APIError,
     api_error_handler,
@@ -17,7 +18,10 @@ from .routes import (
 _active_app: FastAPI | None = None
 
 
-def create_app(store: InMemoryConfluenceStore | None = None) -> FastAPI:
+def create_app(
+    store: InMemoryConfluenceStore | None = None,
+    control_key: str | None = None,
+) -> FastAPI:
     """Create a raw Confluence API application backed by ``store``."""
 
     application = FastAPI(
@@ -28,7 +32,10 @@ def create_app(store: InMemoryConfluenceStore | None = None) -> FastAPI:
     )
     application.state.store = store if store is not None else InMemoryConfluenceStore()
     application.state.started = False
+    application.state.control_key = control_key
     application.include_router(router)
+    if control_key is not None:
+        application.include_router(create_control_router(control_key))
     application.add_exception_handler(APIError, api_error_handler)
     application.add_exception_handler(RequestValidationError, validation_error_handler)
     application.add_exception_handler(StarletteHTTPException, http_exception_handler)
