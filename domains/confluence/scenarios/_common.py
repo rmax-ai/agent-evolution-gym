@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Mapping
+from collections.abc import Mapping, Sequence
 from pathlib import Path
 from typing import Any, ClassVar
 
@@ -95,6 +95,46 @@ def sectioned_body(*sections: tuple[str, str]) -> str:
     return "\n\n".join(f"## {heading}\n{content}" for heading, content in sections)
 
 
+def replace_section(body: str, heading: str, content: str) -> str:
+    """Replace one Markdown section while leaving every other section byte-stable."""
+
+    marker = f"## {heading}\n"
+    sections = body.split("\n\n")
+    for index, section in enumerate(sections):
+        if section.startswith(marker):
+            sections[index] = f"{marker}{content}"
+            return "\n\n".join(sections)
+    raise ValueError(f"section {heading!r} not found")
+
+
+def append_section(body: str, heading: str, content: str) -> str:
+    """Append one complete Markdown section to a sectioned body."""
+
+    return f"{body}\n\n## {heading}\n{content}"
+
+
+def append_to_section(body: str, heading: str, text: str) -> str:
+    """Append a note to an existing section without rewriting neighboring sections."""
+
+    marker = f"## {heading}\n"
+    sections = body.split("\n\n")
+    for index, section in enumerate(sections):
+        if section.startswith(marker):
+            sections[index] = f"{section}\n{text}"
+            return "\n\n".join(sections)
+    raise ValueError(f"section {heading!r} not found")
+
+
+def section_texts(body: str, *, excluding: str | None = None) -> list[str]:
+    """Return complete section texts, optionally excluding one named section."""
+
+    sections = body.split("\n\n")
+    if excluding is None:
+        return sections
+    marker = f"## {excluding}\n"
+    return [section for section in sections if not section.startswith(marker)]
+
+
 def page_space_id(store: InMemoryConfluenceStore, page_id: str) -> str:
     """Return a page's space id as a validated string."""
 
@@ -128,14 +168,28 @@ def page_title(store: InMemoryConfluenceStore, page_id: str) -> str:
     return str(store.pages[page_id].get("title", page_id))
 
 
-def verifier_config(page_id: str, fragment: str | None) -> dict[str, Any]:
+def verifier_config(
+    page_id: str,
+    fragment: str | None,
+    *,
+    expected_final_body: str | None = None,
+    preserved_body_fragments: Sequence[str] | None = None,
+    expected_response: str | None = None,
+) -> dict[str, Any]:
     """Build the small page-oriented configuration consumed by the verifier."""
 
     fragments = {} if fragment is None else {page_id: fragment}
-    return {
+    config: dict[str, Any] = {
         "expected_page_ids": [page_id],
         "expected_content_fragments": fragments,
     }
+    if expected_final_body is not None:
+        config["expected_final_body"] = expected_final_body
+    if preserved_body_fragments is not None:
+        config["preserved_body_fragments"] = list(preserved_body_fragments)
+    if expected_response is not None:
+        config["expected_response"] = expected_response
+    return config
 
 
 __all__ = [
@@ -143,10 +197,14 @@ __all__ = [
     "SNAPSHOT_TIMESTAMP",
     "VERIFIER_ID",
     "ConfluenceScenario",
+    "append_section",
+    "append_to_section",
     "page_owner_id",
     "page_space_id",
     "page_space_name",
     "page_title",
+    "replace_section",
+    "section_texts",
     "sectioned_body",
     "set_page",
     "verifier_config",

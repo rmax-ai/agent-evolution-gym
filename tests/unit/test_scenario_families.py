@@ -63,6 +63,16 @@ def test_family_generation_is_deterministic_and_stages_snapshot(
     assert first.metadata["family"] == family
     assert first.metadata["difficulty"] in {"easy", "medium", "hard"}
     assert first.metadata["verifier_config"]["expected_page_ids"]
+    config = first.metadata["verifier_config"]
+    if family in {"edit_page", "preservation", "concurrent_edit"}:
+        assert isinstance(config["expected_final_body"], str)
+        assert config["preserved_body_fragments"]
+    if family == "retrieval":
+        assert isinstance(config["expected_response"], str)
+        assert "report" in first.goal.casefold()
+    if family == "permissions" and first.metadata["mode"] == "denied_read":
+        assert isinstance(config["expected_response"], str)
+        assert "report" in first.goal.casefold()
     assert first_snapshot == second_snapshot
     assert first_snapshot.id == first.id
     assert first_snapshot.domain_id == "enterprise-confluence"

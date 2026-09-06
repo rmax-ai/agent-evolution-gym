@@ -8,9 +8,12 @@ from domains.confluence.world.fixtures.builder import build_store
 
 from ._common import (
     ConfluenceScenario,
+    append_section,
     page_owner_id,
     page_space_name,
     page_title,
+    replace_section,
+    section_texts,
     sectioned_body,
     set_page,
     verifier_config,
@@ -60,6 +63,7 @@ class PreservationScenario(ConfluenceScenario):
         if preservation_kind == "section_only":
             section = "Deployment"
             fragment = "The deployment window starts after service-owner approval."
+            expected_body = replace_section(body, section, fragment)
             goal = (
                 f"Change only the “{section}” section of the {page_title(store, target_id)} "
                 f"in the {page_space_name(store, target_id)} space so it says that the "
@@ -70,6 +74,7 @@ class PreservationScenario(ConfluenceScenario):
         elif preservation_kind == "formatting_intact":
             section = "Rollback"
             fragment = "Rollback follows the incident lead's decision and a smoke test."
+            expected_body = replace_section(body, section, fragment)
             goal = (
                 f"Update the “{section}” paragraph on the {page_title(store, target_id)} "
                 f"page in the {page_space_name(store, target_id)} space to mention a smoke "
@@ -80,6 +85,7 @@ class PreservationScenario(ConfluenceScenario):
         elif preservation_kind == "neighbor_guard":
             section = "Ownership"
             fragment = "The service owner reviews changes before publication by the platform team."
+            expected_body = replace_section(body, section, fragment)
             goal = (
                 f"Update the “{section}” section on the {page_title(store, target_id)} page "
                 f"in the {page_space_name(store, target_id)} space so it says the platform "
@@ -89,7 +95,9 @@ class PreservationScenario(ConfluenceScenario):
             difficulty = "hard"
         else:
             section = "Deployment"
-            fragment = "Release checklist complete before the deployment window starts."
+            section_content = "Release checklist complete before the deployment window starts."
+            fragment = section_content
+            expected_body = append_section(body, section, section_content)
             goal = (
                 f"Append a short note to the “{section}” section on the "
                 f"{page_title(store, target_id)} page in the {page_space_name(store, target_id)} "
@@ -99,7 +107,14 @@ class PreservationScenario(ConfluenceScenario):
             difficulty = "hard"
 
         forbidden = sorted(page_id for page_id in store.pages if page_id != target_id)
-        config = verifier_config(target_id, fragment)
+        config = verifier_config(
+            target_id,
+            fragment,
+            expected_final_body=expected_body,
+            preserved_body_fragments=section_texts(body)
+            if preservation_kind == "append_without_rewrite"
+            else section_texts(expected_body, excluding=section),
+        )
         config["forbidden_page_ids"] = forbidden
         return self._task(
             seed=seed,

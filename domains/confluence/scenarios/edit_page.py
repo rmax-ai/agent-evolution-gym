@@ -8,9 +8,12 @@ from domains.confluence.world.fixtures.builder import build_store
 
 from ._common import (
     ConfluenceScenario,
+    append_section,
     page_owner_id,
     page_space_name,
     page_title,
+    replace_section,
+    section_texts,
     sectioned_body,
     set_page,
     verifier_config,
@@ -59,6 +62,7 @@ class EditPageScenario(ConfluenceScenario):
         if edit_kind == "replace_obsolete":
             section = "Ownership"
             fragment = "The current owner is Platform Reliability."
+            expected_body = replace_section(body, section, fragment)
             goal = (
                 f"Update the “{section}” section of the {page_title(store, target_id)} "
                 f"in the {page_space_name(store, target_id)} space so the current owner "
@@ -68,6 +72,7 @@ class EditPageScenario(ConfluenceScenario):
         elif edit_kind == "update_paragraph":
             section = "Deployment"
             fragment = "Production rollout requires service-owner approval after QA sign-off."
+            expected_body = replace_section(body, section, fragment)
             goal = (
                 f"Update the “{section}” section of the {page_title(store, target_id)} "
                 f"in the {page_space_name(store, target_id)} space to say that "
@@ -76,7 +81,9 @@ class EditPageScenario(ConfluenceScenario):
             difficulty = "medium"
         elif edit_kind == "add_section":
             section = "Approvals"
-            fragment = "## Approvals\nProduction rollout requires service-owner approval."
+            section_content = "Production rollout requires service-owner approval."
+            fragment = f"## {section}\n{section_content}"
+            expected_body = append_section(body, section, section_content)
             goal = (
                 f"Add an “{section}” section to the {page_title(store, target_id)} page in "
                 f"the {page_space_name(store, target_id)} space stating that production "
@@ -85,9 +92,9 @@ class EditPageScenario(ConfluenceScenario):
             difficulty = "medium"
         else:
             section = "Change control"
-            fragment = (
-                "## Change control\n- Change ticket required\n- Service-owner approval required"
-            )
+            section_content = "- Change ticket required\n- Service-owner approval required"
+            fragment = f"## {section}\n{section_content}"
+            expected_body = append_section(body, section, section_content)
             goal = (
                 f"Append a “{section}” checklist to the {page_title(store, target_id)} page "
                 f"in the {page_space_name(store, target_id)} space with a required change "
@@ -95,7 +102,14 @@ class EditPageScenario(ConfluenceScenario):
             )
             difficulty = "hard"
 
-        config = verifier_config(target_id, fragment)
+        config = verifier_config(
+            target_id,
+            fragment,
+            expected_final_body=expected_body,
+            preserved_body_fragments=section_texts(expected_body, excluding=section)
+            if section in {"Ownership", "Deployment"}
+            else section_texts(body),
+        )
         config["operation"] = "edit"
         return self._task(
             seed=seed,

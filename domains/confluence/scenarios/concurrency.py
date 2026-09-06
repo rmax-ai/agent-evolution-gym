@@ -8,9 +8,12 @@ from domains.confluence.world.fixtures.builder import build_store
 
 from ._common import (
     ConfluenceScenario,
+    append_to_section,
     page_owner_id,
     page_space_name,
     page_title,
+    replace_section,
+    section_texts,
     sectioned_body,
     set_page,
     verifier_config,
@@ -55,25 +58,39 @@ class ConcurrentEditScenario(ConfluenceScenario):
             human_fragment = (
                 "Human editor note: the maintenance window is confirmed with Operations."
             )
+            human_section = "Overview"
         elif change_kind == "rollback":
             section = "Rollback"
             requested_fragment = "Rollback starts after the incident lead confirms the smoke test."
             human_fragment = "Human editor note: rollback validation now includes a smoke test."
+            human_section = "Deployment"
         else:
             section = "Ownership"
             requested_fragment = "The platform team remains the service owner for publication."
             human_fragment = (
                 "Human editor note: the service owner is reviewing the release calendar."
             )
+            human_section = "Overview"
 
-        human_body = f"{body}\n\n{human_fragment}"
+        # The expected order is part of the verifier contract: first the runner
+        # applies the human note to ``human_section`` with a CAS update; then the
+        # agent refreshes and replaces ``section`` with its requested content in a
+        # second CAS update.  The human and agent sections are intentionally
+        # different so an agent that rewrites the stale body loses observable work.
+        human_body = append_to_section(body, human_section, human_fragment)
+        expected_body = replace_section(human_body, section, requested_fragment)
         goal = (
             f"Update the “{section}” section of the {page_title(store, target_id)} page in "
             f"the {page_space_name(store, target_id)} space so it says: "
             f"“{requested_fragment}” Keep any note added by another editor after you first "
             "read the page, and apply only this focused change."
         )
-        config = verifier_config(target_id, requested_fragment)
+        config = verifier_config(
+            target_id,
+            requested_fragment,
+            expected_final_body=expected_body,
+            preserved_body_fragments=section_texts(expected_body, excluding=section),
+        )
         config["preserve_concurrent_fragment"] = human_fragment
         return self._task(
             seed=seed,
@@ -87,7 +104,11 @@ class ConcurrentEditScenario(ConfluenceScenario):
                 "target_section": section,
                 "concurrency": {
                     "page_id": target_id,
-                    "human_edit": {"body": human_body},
+                    "human_edit": {
+                        "section": human_section,
+                        "text": human_fragment,
+                        "body": human_body,
+                    },
                 },
             },
         )

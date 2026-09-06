@@ -79,19 +79,28 @@ class RetrievalScenario(ConfluenceScenario):
             )
             expected_fragment = latest_fragment
             goal = (
-                f"Open the “{title}” page in the {space_name} space and read the current {topic}."
+                f"Open the “{title}” page in the {space_name} space, read the current {topic}, "
+                "and report the guidance text verbatim."
             )
         elif mode == "similar_title":
             expected_fragment = current_fragment
             goal = (
                 f"Find the “{title}” page in the {space_name} space, rather than the "
-                f"similarly named page elsewhere, and read its {topic}."
+                f"similarly named page elsewhere, read its {topic}, and report the text "
+                "verbatim."
             )
         else:
             expected_fragment = current_fragment
-            goal = f"Locate the “{title}” page in the {space_name} space and read its {topic}."
+            goal = (
+                f"Locate the “{title}” page in the {space_name} space, read its {topic}, "
+                "and report the guidance text verbatim."
+            )
 
-        config = verifier_config(target_id, expected_fragment)
+        config = verifier_config(
+            target_id,
+            expected_fragment,
+            expected_response=expected_fragment,
+        )
         config["operation"] = "retrieve"
         return self._task(
             seed=seed,

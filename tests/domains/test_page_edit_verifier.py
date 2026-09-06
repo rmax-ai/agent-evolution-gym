@@ -15,6 +15,7 @@ from domains.confluence.verifiers.page_edit import VERIFIER, get_verifier, verif
 
 from agentgym.core.scenario import read_snapshot
 from agentgym.core.task import Task
+from agentgym.core.trajectory import TrajectoryEvent, TrajectoryEventType
 from agentgym.core.verification import VerificationResult
 from agentgym.world.snapshot import WorldSnapshot
 from agentgym.world.store import InMemoryConfluenceStore
@@ -52,6 +53,31 @@ def _append_fragment(store: InMemoryConfluenceStore, page_id: str, fragment: str
     )
 
 
+def _apply_expected_edit(task: Task, store: InMemoryConfluenceStore) -> None:
+    target_id, fragment = _target_and_fragment(task)
+    config = task.metadata["verifier_config"]
+    expected_body = config.get("expected_final_body")
+    if not isinstance(expected_body, str):
+        _append_fragment(store, target_id, fragment)
+        return
+    store.update_page(
+        target_id,
+        body=expected_body,
+        expected_version=store.pages[target_id]["version"],
+    )
+
+
+def _completion_event(task: Task) -> TrajectoryEvent:
+    expected_response = task.metadata["verifier_config"]["expected_response"]
+    return TrajectoryEvent(
+        sequence=1,
+        timestamp="2026-09-06T00:00:00+00:00",
+        type=TrajectoryEventType.AGENT_COMPLETED,
+        actor="agent",
+        payload={"final_answer": f"Reported guidance: {expected_response}"},
+    )
+
+
 def _snapshot(store: InMemoryConfluenceStore) -> WorldSnapshot:
     return store.snapshot(
         snapshot_id="final",
@@ -71,7 +97,7 @@ async def test_known_good_retrieval_oracle_passes(tmp_path: Path) -> None:
     task, initial = _generate(RetrievalScenario, 1000, tmp_path)
     final = _snapshot(_restored_store(initial))
 
-    result = await _verify_task(task, initial, final)
+    result = await verify(task, initial, final, [_completion_event(task)])
 
     assert result.passed
 
@@ -86,9 +112,8 @@ async def test_known_good_single_page_edit_oracle_passes(
     tmp_path: Path,
 ) -> None:
     task, initial = _generate(scenario_type, seed, tmp_path)
-    target_id, fragment = _target_and_fragment(task)
     store = _restored_store(initial)
-    _append_fragment(store, target_id, fragment)
+    _apply_expected_edit(task, store)
 
     result = await _verify_task(task, initial, _snapshot(store))
 
@@ -99,9 +124,8 @@ async def test_known_good_preservation_oracle_passes_with_explicit_forbidden_pag
     tmp_path: Path,
 ) -> None:
     task, initial = _generate(PreservationScenario, 1201, tmp_path)
-    target_id, fragment = _target_and_fragment(task)
     store = _restored_store(initial)
-    _append_fragment(store, target_id, fragment)
+    _apply_expected_edit(task, store)
 
     result = await _verify_task(task, initial, _snapshot(store))
 
@@ -117,7 +141,7 @@ async def test_known_good_concurrent_edit_oracle_preserves_human_change(
     tmp_path: Path,
 ) -> None:
     task, initial = _generate(ConcurrentEditScenario, 1300, tmp_path)
-    target_id, requested_fragment = _target_and_fragment(task)
+    target_id, _requested_fragment = _target_and_fragment(task)
     concurrency = task.metadata["concurrency"]
     human_edit = concurrency["human_edit"]
     store = _restored_store(initial)
@@ -126,7 +150,11 @@ async def test_known_good_concurrent_edit_oracle_preserves_human_change(
     else:
         human_body = f"{store.pages[target_id]['body']}\n\n{human_edit}"
     store.update_page(target_id, body=human_body, expected_version=1)
-    _append_fragment(store, target_id, requested_fragment)
+    store.update_page(
+        target_id,
+        body=task.metadata["verifier_config"]["expected_final_body"],
+        expected_version=2,
+    )
 
     result = await _verify_task(task, initial, _snapshot(store))
 
@@ -157,7 +185,12 @@ async def test_known_good_permission_oracles_pass_for_all_modes(
         target_id, fragment = _target_and_fragment(task)
         _append_fragment(store, target_id, fragment)
 
-    result = await _verify_task(task, initial, _snapshot(store))
+    trajectory = (
+        [_completion_event(task)]
+        if mode == "denied_read"
+        else {"final_answer": "incorrect self-report"}
+    )
+    result = await verify(task, initial, _snapshot(store), trajectory)
 
     assert result.passed
 
@@ -255,6 +288,41 @@ async def test_version_skip_of_plus_three_fails_exact_version_assertion(tmp_path
         assertion
         for assertion in result.assertions
         if assertion.id == f"page-version-bumped-by-one:{target_id}"
+    ).passed
+
+
+async def test_changed_page_history_must_preserve_prior_entries(tmp_path: Path) -> None:
+    task, initial = _generate(EditPageScenario, 1100, tmp_path)
+    target_id, _ = _target_and_fragment(task)
+    store = _restored_store(initial)
+    _apply_expected_edit(task, store)
+    store.page_versions[target_id][0]["body"] = "forged prior history"
+
+    result = await _verify_task(task, initial, _snapshot(store))
+
+    assert not result.passed
+    assert not next(
+        assertion
+        for assertion in result.assertions
+        if assertion.id == f"page-history-prior-entries:{target_id}"
+    ).passed
+
+
+async def test_untouched_page_history_must_remain_byte_identical(tmp_path: Path) -> None:
+    task, initial = _generate(EditPageScenario, 1101, tmp_path)
+    target_id, _ = _target_and_fragment(task)
+    store = _restored_store(initial)
+    _apply_expected_edit(task, store)
+    untouched_id = next(page_id for page_id in store.pages if page_id != target_id)
+    store.page_versions[untouched_id][0]["body"] = "forged untouched history"
+
+    result = await _verify_task(task, initial, _snapshot(store))
+
+    assert not result.passed
+    assert not next(
+        assertion
+        for assertion in result.assertions
+        if assertion.id == f"page-history-unchanged:{untouched_id}"
     ).passed
 
 

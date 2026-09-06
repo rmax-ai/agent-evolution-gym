@@ -64,6 +64,27 @@ class SplitSpec(BaseModel):
 
     entries: list[SplitEntry]
 
+    @model_validator(mode="after")
+    def validate_unique_allocations(self) -> Self:
+        """Reject repeated ``(scenario_id, seed)`` allocations in one manifest."""
+
+        seen: set[tuple[str, int]] = set()
+        duplicates: set[tuple[str, int]] = set()
+        for entry in self.entries:
+            for seed in entry.resolved_seeds:
+                allocation = (entry.scenario_id, seed)
+                if allocation in seen:
+                    duplicates.add(allocation)
+                seen.add(allocation)
+
+        if duplicates:
+            formatted = ", ".join(
+                f"({scenario_id!r}, {seed})"
+                for scenario_id, seed in sorted(duplicates, key=lambda item: (item[0], item[1]))
+            )
+            raise ValueError(f"duplicate (scenario_id, seed) allocations: {formatted}")
+        return self
+
     @property
     def scenarios(self) -> list[SplitEntry]:
         """Alias for callers that refer to entries as scenario records."""

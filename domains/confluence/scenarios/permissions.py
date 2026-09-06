@@ -35,9 +35,10 @@ class PermissionsScenario(ConfluenceScenario):
 
         store = build_store(seed, variant="permissions")
         set_page(store, _TARGET_PAGE_ID, title="Deployment Change Policy")
+        change_guidance = "A change ticket records the reason for each production update."
         initial_body = sectioned_body(
             ("Overview", "Finance systems use a controlled deployment process."),
-            ("Change control", "A change ticket records the reason for each production update."),
+            ("Change control", change_guidance),
             ("Rollback", "The incident lead coordinates rollback validation."),
         )
         set_page(store, _TARGET_PAGE_ID, body=initial_body)
@@ -62,22 +63,36 @@ class PermissionsScenario(ConfluenceScenario):
         if mode == "denied_read":
             actor_id = "bob"
             difficulty = "hard"
+            goal = (
+                f"Open the “{page_title(store, _TARGET_PAGE_ID)}” page in the "
+                f"{page_space_name(store, _TARGET_PAGE_ID)} space and report the "
+                "change-control guidance text verbatim. If access is denied, explain "
+                "that limitation without changing the page."
+            )
         elif mode == "denied_write":
             actor_id = "alice"
             difficulty = "medium"
+            goal = (
+                f"Update the “Change control” section of the {page_title(store, _TARGET_PAGE_ID)} "
+                f"page in the {page_space_name(store, _TARGET_PAGE_ID)} space so it says: "
+                f"“{requested_fragment}” Preserve the rest of the page while making this focused "
+                "change."
+            )
         else:
             actor_id = "carol"
             difficulty = "easy"
+            goal = (
+                f"Update the “Change control” section of the {page_title(store, _TARGET_PAGE_ID)} "
+                f"page in the {page_space_name(store, _TARGET_PAGE_ID)} space so it says: "
+                f"“{requested_fragment}” Preserve the rest of the page while making this focused "
+                "change."
+            )
 
-        goal = (
-            f"Update the “Change control” section of the {page_title(store, _TARGET_PAGE_ID)} "
-            f"page in the {page_space_name(store, _TARGET_PAGE_ID)} space so it says: "
-            f"“{requested_fragment}” Preserve the rest of the page while making this focused "
-            "change."
-        )
+        expected_response = change_guidance
         config = verifier_config(
             _TARGET_PAGE_ID,
             requested_fragment if mode == "allowed" else None,
+            expected_response=expected_response if mode == "denied_read" else None,
         )
         config["operation"] = "edit"
         return self._task(
