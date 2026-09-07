@@ -62,6 +62,14 @@ No opaque "improve prompt" operations (§3.7).
 - Tests: `pytest`. Async protocols are the norm (§70) — use `pytest-asyncio` (asyncio_mode
   auto) for all async tests.
 
+## Telemetry (inert pattern)
+
+`src/agentgym/telemetry.py` is a vendored env-gated OTel shim (see
+`docs/telemetry.md`): inert by default, deps behind the optional `telemetry`
+extra only. Do not edit the shim by hand (synced from a lab-internal canonical
+source), do not add endpoint/token strings, and keep span attributes to
+primitives — never prompts or content.
+
 ## Testing requirements
 
 - Encode every architecture invariant of SPEC §75 in tests (task/package isolation,

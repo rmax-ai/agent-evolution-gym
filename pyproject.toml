@@ -19,6 +19,12 @@ dependencies = [
     "uvicorn>=0.52.4",
 ]
 
+[project.optional-dependencies]
+telemetry = [
+    "opentelemetry-sdk>=1.26",
+    "opentelemetry-exporter-otlp-proto-http>=1.26",
+]
+
 [dependency-groups]
 dev = [
     "pytest>=9.1.1",
@@ -50,3 +56,5 @@ select = ["E", "F", "I", "UP", "B", "SIM", "RUF", "ASYNC"]
 
 [tool.ruff.lint.per-file-ignores]
 "tests/**" = ["S101"]
+# Vendored canonical telemetry shim (see AGENTS.md); style governed upstream.
+"src/agentgym/telemetry.py" = ["RUF100"]
