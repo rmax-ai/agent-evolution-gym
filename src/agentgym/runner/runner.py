@@ -10,11 +10,12 @@ import os
 import sys
 import uuid
 from collections.abc import Awaitable, Callable, Mapping, Sequence
-from datetime import UTC, datetime
+from dataclasses import dataclass, replace
 from pathlib import Path
 from types import ModuleType
 from typing import Any
 
+from agentgym import __version__
 from agentgym.core.package import AgentPackage
 from agentgym.core.rollout import Rollout, RunStatus
 from agentgym.core.scenario import read_snapshot
@@ -23,6 +24,7 @@ from agentgym.core.trajectory import TrajectoryEvent, TrajectoryEventType
 from agentgym.core.verification import AssertionResult, VerificationResult
 from agentgym.runner.budgets import BudgetTracker, ExecutionBudget
 from agentgym.runner.lifecycle import world_session
+from agentgym.runner.recorder import TrajectoryRecorder
 from agentgym.runtime.base import (
     AgentTaskView,
     EventSink,
@@ -32,6 +34,8 @@ from agentgym.runtime.base import (
 )
 from agentgym.runtime.llm import LLMClient
 from agentgym.runtime.reference_agent import ReferenceAgent
+from agentgym.storage.filesystem import RunStore
+from agentgym.storage.sqlite import IndexStore
 from agentgym.world.base import World
 from agentgym.world.process import ProcessWorldError, ProcessWorldProvider
 from agentgym.world.snapshot import WorldSnapshot
@@ -52,24 +56,17 @@ class RunnerRollout(Rollout):
     error: str | None = None
 
 
-class _TrajectoryRecorder(EventSink):
-    def __init__(self) -> None:
-        self.events: list[TrajectoryEvent] = []
+@dataclass(frozen=True, slots=True)
+class RunnerConfig:
+    """Optional runner metadata and index configuration."""
 
-    async def emit(
-        self,
-        event_type: TrajectoryEventType | str,
-        actor: str,
-        payload: dict[str, Any],
-    ) -> None:
-        event = TrajectoryEvent(
-            sequence=len(self.events) + 1,
-            timestamp=datetime.now(UTC).isoformat(),
-            type=event_type,
-            actor=actor,
-            payload=payload,
-        )
-        self.events.append(event)
+    sqlite_path: str | Path | None = None
+    domain_version: str | None = None
+    runtime_name: str = "reference-agent"
+    runtime_version: str = __version__
+    model_provider: str | None = None
+    model_identifier: str | None = None
+    seed: int | None = None
 
 
 class Runner:
@@ -77,6 +74,7 @@ class Runner:
 
     def __init__(
         self,
+        config: RunnerConfig | None = None,
         *,
         domain_package: str = "domains.confluence",
         verifier_ref: str | None = None,
@@ -84,7 +82,12 @@ class Runner:
         package_root: str | Path | None = None,
         snapshot_root: str | Path | None = None,
         default_budget: ExecutionBudget | None = None,
+        sqlite_path: str | Path | None = None,
     ) -> None:
+        selected_config = config or RunnerConfig()
+        if sqlite_path is not None:
+            selected_config = replace(selected_config, sqlite_path=sqlite_path)
+        self.config = selected_config
         self.domain_package = domain_package
         selected_verifier = verifier_ref
         if selected_verifier is None and verifier_modules:
@@ -110,7 +113,7 @@ class Runner:
         # synchronous in this story; all world/model IO remains async.
         artifact_dir = Path(run_dir).resolve()  # noqa: ASYNC240
         artifact_dir.mkdir(parents=True, exist_ok=True)
-        recorder = _TrajectoryRecorder()
+        recorder = TrajectoryRecorder()
         tracker = BudgetTracker(budget or self.default_budget)
         await recorder.emit(
             TrajectoryEventType.RUN_STARTED,
@@ -130,10 +133,6 @@ class Runner:
         try:
             initial_path = self._resolve_snapshot_path(task, artifact_dir)
             initial_snapshot = read_snapshot(initial_path)
-            _write_json(
-                artifact_dir / "initial_state.json", initial_snapshot.model_dump(mode="json")
-            )
-
             if world is None:
                 world = ProcessWorldProvider(initial_path)
             async with world_session(world, initial_snapshot) as active_world:
@@ -171,7 +170,6 @@ class Runner:
 
             if final_snapshot is None:
                 raise RunnerError("world did not return a final snapshot")
-            _write_json(artifact_dir / "final_state.json", final_snapshot.model_dump(mode="json"))
             status = _runtime_status(runtime_result.status)
             if runtime_result.status not in {
                 RunStatus.AGENT_ERROR,
@@ -194,26 +192,14 @@ class Runner:
             error = str(exc)
             status = RunStatus.VERIFIER_ERROR
             verification = _not_verified(error)
-            if final_snapshot is not None:
-                _write_json(
-                    artifact_dir / "final_state.json", final_snapshot.model_dump(mode="json")
-                )
         except (ProcessWorldError, RunnerError, OSError, ValueError) as exc:
             error = str(exc)
             status = RunStatus.ENVIRONMENT_ERROR
             verification = _not_verified(error)
-            if final_snapshot is None and initial_snapshot is not None:
-                _write_json(
-                    artifact_dir / "final_state.json", initial_snapshot.model_dump(mode="json")
-                )
         except Exception as exc:
             error = str(exc)
             status = RunStatus.ENVIRONMENT_ERROR
             verification = _not_verified(error)
-            if final_snapshot is None and initial_snapshot is not None:
-                _write_json(
-                    artifact_dir / "final_state.json", initial_snapshot.model_dump(mode="json")
-                )
 
         if runtime_result is not None and runtime_result.error is not None and error is None:
             error = runtime_result.error
@@ -223,17 +209,49 @@ class Runner:
             "runner",
             {"status": status.value, "error": error},
         )
-        _write_trajectory(artifact_dir / "trajectory.jsonl", recorder.events)
-        _write_json(
-            artifact_dir / "manifest.json",
-            {"task_id": task.id, "package_id": package.id, "status": status.value},
+        rollout_id = f"rollout-{task.id}-{uuid.uuid4().hex[:12]}"
+        initial_for_storage: object = (
+            initial_snapshot.model_dump(mode="json") if initial_snapshot is not None else {}
         )
+        final_for_storage: object = (
+            final_snapshot.model_dump(mode="json")
+            if final_snapshot is not None
+            else initial_for_storage
+        )
+        manifest = RunStore().store_run(
+            artifact_dir,
+            run_id=rollout_id,
+            task=task,
+            package=package,
+            task_id=task.id,
+            package_id=package.id,
+            initial_state=initial_for_storage,
+            final_state=final_for_storage,
+            trajectory=recorder,
+            verification=verification,
+            domain_version=self.config.domain_version or _domain_version(self.domain_package),
+            runtime={
+                "name": self.config.runtime_name,
+                "version": self.config.runtime_version,
+            },
+            model={
+                "provider": self.config.model_provider or llm_client.__class__.__name__,
+                "identifier": self.config.model_identifier
+                or str(getattr(llm_client, "model", "unknown")),
+            },
+            seed=self.config.seed if self.config.seed is not None else _task_seed(task),
+            status=status.value,
+        )
+        if self.config.sqlite_path is not None:
+            index = IndexStore(self.config.sqlite_path)
+            await index.init_db()
+            await index.insert_run(manifest)
 
-        initial_ref = "initial_state.json"
-        final_ref = "final_state.json"
+        initial_ref = "initial-state.json"
+        final_ref = "final-state.json"
         metrics = tracker.metrics()
         return RunnerRollout(
-            id=f"rollout-{task.id}-{uuid.uuid4().hex[:12]}",
+            id=rollout_id,
             task_id=task.id,
             package_id=package.id,
             initial_state_ref=initial_ref,
@@ -391,7 +409,7 @@ class Runner:
 
     async def _emit_verification(
         self,
-        recorder: _TrajectoryRecorder,
+        recorder: TrajectoryRecorder,
         verification: VerificationResult,
     ) -> None:
         for assertion in verification.assertions:
@@ -410,7 +428,7 @@ class Runner:
         reference = Path(task.initial_snapshot_ref)
         if reference.is_absolute() and reference.is_file():
             return reference
-        roots = [run_dir, run_dir.parent]
+        roots = [run_dir, *run_dir.parents]
         if self.snapshot_root is not None:
             roots.insert(0, self.snapshot_root)
         roots.extend([Path.cwd(), Path(__file__).resolve().parents[3]])
@@ -591,17 +609,31 @@ def _not_verified(reason: str) -> VerificationResult:
     )
 
 
-def _write_json(path: Path, value: object) -> None:
-    path.write_text(json.dumps(value, indent=2, sort_keys=True) + "\n", encoding="utf-8")
+def _domain_version(domain_package: str) -> str:
+    """Resolve a domain YAML version for the reproducibility manifest."""
 
+    from agentgym.core.domain import DomainSpec
 
-def _write_trajectory(path: Path, events: Sequence[TrajectoryEvent]) -> None:
-    path.write_text(
-        "".join(
-            json.dumps(event.model_dump(mode="json"), sort_keys=True) + "\n" for event in events
-        ),
-        encoding="utf-8",
+    relative = Path(*domain_package.split(".")) / "domain.yaml"
+    candidates = (
+        Path.cwd() / relative,
+        Path(__file__).resolve().parents[3] / relative,
     )
+    for candidate in candidates:
+        if candidate.is_file():
+            try:
+                return DomainSpec.from_yaml(candidate).version
+            except (OSError, ValueError):
+                continue
+    return "unknown"
+
+
+def _task_seed(task: Task) -> int:
+    metadata_seed = task.metadata.get("seed")
+    if isinstance(metadata_seed, int) and not isinstance(metadata_seed, bool):
+        return metadata_seed
+    suffix = task.id.rsplit("-", maxsplit=1)[-1]
+    return int(suffix) if suffix.isdigit() else 0
 
 
 async def run(
@@ -618,4 +650,4 @@ async def run(
     return await Runner().run(task, package, world_provider, llm_client, run_dir, budget=budget)
 
 
-__all__ = ["Runner", "RunnerError", "RunnerRollout", "run"]
+__all__ = ["Runner", "RunnerConfig", "RunnerError", "RunnerRollout", "run"]
